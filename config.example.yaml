@@ -109,4 +109,4 @@ mcp:
     外部表在 search_objects 裡列不出來，請改查 information_schema.foreign_tables。
   search_path: shop_tx, shop_game, shop_cms, shop_stg_tx
   max_rows: 200
-  query_timeout: 12
+  query_timeout: 12                 # 秒。MariaDB 上游的連線也以此設定 max_statement_time

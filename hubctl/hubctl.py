@@ -101,6 +101,22 @@ def port_of(u):
     return int(u.get("port") or DEFAULT_PORTS[u["type"]])
 
 
+def mariadb_init_command(cfg, u):
+    """MariaDB 上游連線建立後執行的指令。
+
+    mysql_fdw 等待遠端回應時，hub 的 statement_timeout 中斷不了，逾時只能交給 MariaDB 執行，
+    所以預設以 mcp.query_timeout 設定該連線的 max_statement_time。
+    server_options 有 init_command 時以它為準；沒有 mcp 區塊時不設限，回傳 None。
+    """
+    custom = (u.get("server_options") or {}).get("init_command")
+    if custom:
+        return str(custom)
+    m = cfg.get("mcp")
+    if not m:
+        return None
+    return f"SET SESSION max_statement_time={int(m.get('query_timeout') or 30)}"
+
+
 # ---------------------------------------------------------------- 設定檔
 
 def load_secrets():
@@ -528,6 +544,9 @@ def cmd_apply():
                         fdw, um = "postgres_fdw", {"user": u["user"], "password": u["password"]}
                     else:
                         o = {"host": host, "port": port, **extra}
+                        init = mariadb_init_command(cfg, u)
+                        if init:
+                            o["init_command"] = init
                         fdw, um = "mysql_fdw", {"username": u["user"], "password": u["password"]}
 
                     cur.execute(sql.SQL("CREATE SERVER {} FOREIGN DATA WRAPPER {} OPTIONS ({})")
@@ -644,6 +663,8 @@ def cmd_check():
         via = f" → [{u['via']}] → {u['host']}:{port_of(u)}" if u.get("via") else "（直連）"
         locals_ = ", ".join(i["local"] for i in u["_imports"])
         log(f"  {name}（{u['type']}）: {h}:{p}{via}  →  schema {locals_}")
+        if u["type"] == "mariadb":
+            log(f"      連線初始指令：{mariadb_init_command(cfg, u) or '（無）'}")
     for full in cfg["views"]:
         log(f"  view {full}")
     for rn, r in cfg["roles"].items():

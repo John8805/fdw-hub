@@ -125,7 +125,7 @@ AI 工具 ─ MCP ─► dbhub ─► hub（PostgreSQL，ai_reader 唯讀）
 ## 已知限制
 
 - MariaDB 外部表沒有等同 `updatable 'false'` 的強制禁寫，寫入防護靠 `ai_reader` 的權限與上游帳號權限。
-- 12 秒逾時由 hub 判定，是否一併取消 RDS 上的查詢尚未驗證。
+- 逾時：PostgreSQL 上游由 hub 判定，逾時時一併取消遠端查詢。MariaDB 上游在等待遠端時 hub 中斷不了，`apply` 因此自動讓每條 MariaDB 連線執行 `SET SESSION max_statement_time=<mcp.query_timeout>`，由 MariaDB 終止過久的查詢，只影響本工具的連線。要改用其他指令，在該上游的 `server_options.init_command` 指定。沙盒實測回應時間在設定值之後 0～3.5 秒內，RDS 上未驗證。
 - 帳號自設定移除時只會停用登入（`NOLOGIN`），不會刪除。
 
 ## 疑難排解
