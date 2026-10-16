@@ -1,0 +1,112 @@
+# ============================================================
+#  fdw-hub 設定範本
+#  複製成 config.yaml 後，依自己的環境修改（config.yaml 已列入 .gitignore）。
+#  帳密以 ${變數名稱} 引用，值用 .\dbhub.ps1 set 存進加密檔 .env.enc。
+#  修改後執行：.\dbhub.ps1 apply
+# ============================================================
+
+ssh:
+  strict_host_key_checking: "yes"   # yes（建議）/ accept-new / no
+
+# ---------- 跳板機 ----------
+# key      私鑰檔名，檔案放在 ssh/ 資料夾，私鑰不能有 passphrase
+# password 密碼認證（${變數}），與 key 擇一；密碼認證的跳板機不能再指定 jump
+bastions:
+  bastion_a:                        # 金鑰認證
+    host: jump-a.example.com
+    port: 22
+    user: ec2-user
+    key: id_bastion_a
+
+  bastion_b:                        # 密碼認證
+    host: jump-b.example.com
+    port: 22
+    user: ec2-user
+    password: ${BASTION_B_SSH_PASSWORD}
+
+  # 需要先經過 bastion_a 才能到的機器（只有金鑰認證可以串接）
+  # bastion_c:
+  #   host: 10.0.3.5
+  #   user: ec2-user
+  #   key: id_bastion_c
+  #   jump: bastion_a
+
+# ---------- 上游資料庫 ----------
+# 項目名稱同時是 FOREIGN SERVER 名稱與本地 schema 名稱：
+# 小寫英數與底線，不能以數字或 pg_ 開頭，所有上游之間不可重複。
+# 命名建議 <專案>_<用途>，測試環境加 stg，例如 shop_tx、shop_stg_tx。
+upstreams:
+  # PostgreSQL，金鑰跳板機；import 省略 tables 代表匯入整個 schema
+  shop_tx:
+    type: postgres
+    via: bastion_a
+    host: prod-pg.example.internal  # 從「跳板機」看出去的位址
+    port: 5432
+    database: transaction
+    user: ${SHOP_PG_USER}
+    password: ${SHOP_PG_PASSWORD}
+    import:
+      - remote: public
+        # tables: [games, platforms]
+
+  # MariaDB，走同一台跳板機，共用一條 SSH 連線
+  shop_game:
+    type: mariadb
+    via: bastion_a
+    host: prod-maria.example.internal
+    port: 3306
+    database: game
+    user: ${SHOP_MARIA_USER}
+    password: ${SHOP_MARIA_PASSWORD}
+
+  # 同一台 MariaDB 的另一個庫，共用帳密；一個上游對應一個 database
+  shop_cms:
+    type: mariadb
+    via: bastion_a
+    host: prod-maria.example.internal
+    port: 3306
+    database: cms
+    user: ${SHOP_MARIA_USER}
+    password: ${SHOP_MARIA_PASSWORD}
+
+  # 測試環境，走密碼認證的跳板機
+  shop_stg_tx:
+    type: postgres
+    via: bastion_b
+    host: stg-pg.example.internal
+    port: 5432
+    database: transaction
+    user: ${SHOP_STG_DB_USER}
+    password: ${SHOP_STG_DB_PASSWORD}
+    import:
+      - remote: public
+
+# ---------- 給小帳號看的 view（遮罩或隱藏欄位）----------
+# 啟用後把 roles 的授權改成只給 view 所在的 schema。
+# views:
+#   ai.customers: |
+#     SELECT id, city, left(phone, 4) || '****' AS phone_masked
+#     FROM shop_tx.customers
+views: {}
+
+# ---------- 本地小帳號（一律唯讀）----------
+roles:
+  ai_reader:
+    password: ${AI_READER_PASSWORD}
+    connection_limit: 3
+    grant:
+      schemas: [shop_tx, shop_game, shop_cms, shop_stg_tx]
+    settings:
+      search_path: shop_tx, shop_game, shop_cms, shop_stg_tx
+      # 以 DBeaver 等用戶端登入時生效；DBHub 的連線以 mcp.query_timeout 為準
+      statement_timeout: 15s
+
+# ---------- DBHub（給 AI 工具的 MCP 伺服器）----------
+mcp:
+  role: ai_reader
+  description: >-
+    公司資料庫（唯讀）。schema 前綴 shop_ 為正式環境，shop_stg_ 為測試環境。
+    外部表在 search_objects 裡列不出來，請改查 information_schema.foreign_tables。
+  search_path: shop_tx, shop_game, shop_cms, shop_stg_tx
+  max_rows: 200
+  query_timeout: 12

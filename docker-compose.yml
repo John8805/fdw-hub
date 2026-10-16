@@ -1,0 +1,75 @@
+name: fdw-hub
+
+services:
+  # 本地 PostgreSQL 集線器
+  hub:
+    build: ./hub
+    restart: unless-stopped
+    command: ["postgres",
+      "-c", "max_locks_per_transaction=256",
+      "-c", "logging_collector=on",
+      "-c", "log_directory=/var/log/postgresql",
+      "-c", "log_filename=postgresql-%Y-%m-%d.log",
+      "-c", "log_rotation_age=1d",
+      "-c", "log_rotation_size=100MB"]
+    environment:
+      POSTGRES_DB: hub
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${HUB_ADMIN_PASSWORD:?請在 .env 設定 HUB_ADMIN_PASSWORD}
+    ports:
+      - "${HUB_BIND:-127.0.0.1}:${HUB_PORT:-5433}:5432"
+    volumes:
+      - hubdata:/var/lib/postgresql/data
+      - ./logs:/var/log/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hub"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # SSH 通道（依 config.yaml 自動建立，不對外開放）
+  tunnel:
+    build: ./hubctl
+    restart: unless-stopped
+    init: true
+    command: ["tunnel"]
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./.env.enc:/app/.env.enc:ro
+      - ./ssh:/ssh-src:ro
+
+  # 套用 config.yaml（執行完就結束）
+  apply:
+    build: ./hubctl
+    restart: "no"
+    command: ["apply"]
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./.env.enc:/app/.env.enc:ro
+      - ./ssh:/ssh-src:ro
+      - generated:/generated
+    depends_on:
+      hub:
+        condition: service_healthy
+      tunnel:
+        condition: service_started
+
+  # 給 AI 工具用的 MCP 伺服器（唯讀，連 config.yaml 裡 mcp.role 指定的帳號）
+  dbhub:
+    image: bytebase/dbhub:1.2.3
+    restart: unless-stopped
+    command: ["--transport", "http", "--port", "8080", "--config=/generated/dbhub.toml"]
+    environment:
+      # OpenConnector 的容器透過主機打進來，Host 不是 loopback
+      DBHUB_ALLOWED_HOSTS: host.docker.internal
+    ports:
+      - "127.0.0.1:${DBHUB_PORT:-8080}:8080"
+    volumes:
+      - generated:/generated:ro
+    depends_on:
+      apply:
+        condition: service_completed_successfully
+
+volumes:
+  hubdata:
+  generated:

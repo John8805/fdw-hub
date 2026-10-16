@@ -1,0 +1,6 @@
+.env
+.env.enc
+config.yaml
+logs/
+ssh/*
+!ssh/.gitkeep
